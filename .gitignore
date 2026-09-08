@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.env
+# 数据不入库
+论文*/
+*.csv
+*.json
+!清单示例.json
