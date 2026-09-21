@@ -6,3 +6,5 @@ __pycache__/
 *.csv
 *.json
 !清单示例.json
+stage_audit_out/
+win-tools/**/audit_log_*.txt

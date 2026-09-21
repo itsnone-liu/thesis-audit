@@ -68,3 +68,18 @@ python3 approve_receipt.py 论文.docx --field placeholder --by 批准人 --reas
 ## 依赖
 
 python-docx、Pillow、requests（审题通道）——见 requirements.txt。
+
+## win-tools 网站审核线 (2026-09-21)
+
+自 win-tools 同步的网站+批量审核程序, 保持原相对结构:
+
+- `win-tools/增强0908/lw_stage_audit.py` — 网站论文初稿审核: 登录→学生论文阶段页→筛[现场答辩×初稿未审]→审核弹窗提取(可下载docx走评审器)→判定+意见; `--scan`只列清单 / 默认dry-run零写 / `--commit`真实提交(填意见→签名提交→弹窗反馈+回读验证双层确认); `--batch`切批次(自动点查询), `--defense`筛答辩方式
+- `win-tools/增强0908/st_v2.py` — 网站审题程序: 题目四形态对象认定(具体名称/脱敏前置, 具体/脱敏副标题"——以XX为例"), 设计类专业纳入判定
+- `win-tools/批量/{lwjg,lwsj,lwfx}.py` + `win-tools/增强0908/lw_gx_tm.py` — 四专业评审器(经管/设计/法学/机械土木), 输出含"评审报告"字段(自然语言三段式: 总体评价/具体评价/修改意见, 不合格不打分)
+- `win-tools/增强0908/report_render.py` — 报告渲染层: 三段式校验+缺段补齐, 禁程序痕迹词(实测/检测到/程序判定等), 不合格强制剥分
+- `win-tools/增强0908/audit_principles.py` — 共享审核原则(对象认定四形态口径)
+- `win-tools/增强0908/batch_v2.py` — 本地批量入口(已挂渲染层, 自动落 评语/xxx_评语.txt)
+
+凭据与密钥全部走环境变量(不入库): `ST_USER/ST_PASS`(网站), `DEEPSEEK_API_KEY/DEEPSEEK_BASE_URL/DEEPSEEK_MODEL`(LLM)。
+
+已知边界: 提交(--commit)链路已实现待首个待审初稿实测; 全站历史批次已扫无待审初稿。
