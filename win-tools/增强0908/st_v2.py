@@ -4,7 +4,7 @@
 1. 土木/机械/法学 从"直过"改为真实评判(规范性+专业性角度)
 2. 默认 dry-run: 只输出判定结果, 不点任何网站按钮; --commit 才实际提交
 3. 支持离线模式: --titles 题目清单json 批量判定(不登录网站)
-4. 账密优先读环境变量 ST_USER/ST_PASS(不落盘明文), 回退 st.py 内配置
+4. 账密读环境变量 ST_USER/ST_PASS(不落盘明文; 仓库版无 st.py 回退)
 """
 import os
 import re

@@ -83,3 +83,8 @@ python-docx、Pillow、requests（审题通道）——见 requirements.txt。
 凭据与密钥全部走环境变量(不入库): `ST_USER/ST_PASS`(网站), `DEEPSEEK_API_KEY/DEEPSEEK_BASE_URL/DEEPSEEK_MODEL`(LLM)。
 
 已知边界: 提交(--commit)链路已实现待首个待审初稿实测; 全站历史批次已扫无待审初稿。
+
+### 审题部分
+
+- `win-tools/st/st.py` — 网站审题自动化本体(selenium): 登录→选题审核页→逐题 LLM 判定→选择审核结果/驳回理由(账密与key均走环境变量 ST_USER/ST_PASS/DEEPSEEK_API_KEY; 历史变体 st1/st2/st_final/st_fixed/stt 不入库)
+- `win-tools/增强0908/st_v2.py` — v3 增强版: 题目四形态对象认定 + 设计类专业(服装/数媒/视觉)纳入判定 + 网站模式(dry-run 判定落盘, --commit 待指令)
