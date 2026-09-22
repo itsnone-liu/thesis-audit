@@ -161,23 +161,66 @@ class ThesisDesignReviewer:
             
             for para_idx, para in enumerate(doc.paragraphs):
                 text = para.text.strip()
-                if 'graphicData' in para._element.xml:
-                    image_index += 1
-                    # 获取图片周围的文字（当前段落 + 下一段落）
-                    surrounding_text = text.lower()
+                # 2026-09-22修: VML老格式(<w:pict>/<v:imagedata>)也认, 不再只认graphicData
+                para_xml = para._element.xml
+                # 2026-09-22修: 段内多图也逐张计数(同一段放多张图/拼图时, 原逻辑每段只+1会漏数)
+                #   <a:blip>计数精确(每张图一个r:embed), VML老格式数<v:imagedata>
+                n_imgs = para_xml.count('<a:blip') + para_xml.count('<v:imagedata')
+                if ('graphicData' in para_xml or '<w:pict' in para_xml
+                        or 'imagedata' in para_xml or '<w:drawing' in para_xml) and n_imgs > 0:
+                    # 获取图片周围的文字（上一段 + 当前段落 + 下一段落）
+                    # 2026-09-22修: 图注("图 4-1 xxx示意图")可能位于图片上方或下方, 三向合并
+                    surrounding_text = ""
+                    if para_idx > 0:
+                        surrounding_text += doc.paragraphs[para_idx - 1].text.strip().lower() + " "
+                    surrounding_text += text.lower()
                     if para_idx + 1 < len(doc.paragraphs):
                         next_text = doc.paragraphs[para_idx + 1].text.strip().lower()
                         surrounding_text += " " + next_text
-                    images_info.append({
-                        "index": image_index,
-                        "para_idx": para_idx,
-                        "surrounding_text": surrounding_text
-                    })
-                    stats["image_count"] += 1
+                    for _ in range(n_imgs):
+                        image_index += 1
+                        images_info.append({
+                            "index": image_index,
+                            "para_idx": para_idx,
+                            "surrounding_text": surrounding_text
+                        })
+                        stats["image_count"] += 1
+            
+            # 2026-09-22修: 扫描表格中的图片——学生常把设计图/效果图放进表格单元格,
+            # 只遍历doc.paragraphs会漏数, 导致"图纸严重不足"误判。图注一般在同一cell内文字。
+            for tb_idx, tb in enumerate(doc.tables):
+                # 整表文字兜底(表头列名常含"设计图/效果图/示意图"等)
+                table_all_text = " ".join(
+                    cell.text.strip().lower()
+                    for row in tb.rows for cell in row.cells if cell.text.strip()
+                )
+                for row in tb.rows:
+                    for cell in row.cells:
+                        cell_xml = cell._tc.xml
+                        n_imgs = cell_xml.count('<a:blip') + cell_xml.count('<v:imagedata')
+                        if n_imgs > 0:
+                            cell_text = cell.text.strip().lower()
+                            surrounding_text = (cell_text + " " + table_all_text).strip()
+                            for _ in range(n_imgs):
+                                image_index += 1
+                                images_info.append({
+                                    "index": image_index,
+                                    "para_idx": -1,
+                                    "in_table": True,
+                                    "tb_idx": tb_idx,
+                                    "surrounding_text": surrounding_text
+                                })
+                                stats["image_count"] += 1
             
             # 第二遍：根据周围文字判断图片类型
-            design_keywords = ['平面图', '立面图', '剖面图', '设计图', '总平面', '布局图', '施工图']
-            effect_keywords = ['效果图', '渲染图', '透视图', '三维图', '3d', '鸟瞰图']
+            # 2026-09-22修: 扩展关键词——设计类论文图注常用"示意图/系统图/应用图/展示图/设计图",
+            # 效果图常用"效果图/渲染图/场景/展示/视觉呈现", 覆盖视觉传达/环境设计/服装等多专业
+            design_keywords = ['平面图', '立面图', '剖面图', '设计图', '总平面', '布局图', '施工图',
+                               '示意图', '系统图', '应用图', '展示图', '设计稿', 'logo', '标志',
+                               'vi', '视觉识别', '图形设计', '图案', '纹样', '款式图', '结构图']
+            effect_keywords = ['效果图', '渲染图', '透视图', '三维图', '3d', '鸟瞰图',
+                               '场景应用', '场景展示', '场景呈现', '应用场景', '展示效果',
+                               '视觉呈现', '陈列', '实景', '虚拟展示']
             
             for img in images_info:
                 text = img["surrounding_text"]
@@ -354,13 +397,17 @@ class ThesisDesignReviewer:
 ## 评审报告撰写规范(最高优先级, 适用于所有评语与"评审报告"字段)
 1. 评语以自然语言撰写, 像一位毕业论文指导教师在评阅: 禁止"实测""检测到""程序判定""证据""预检""指标显示"等程序化词汇;
    数据表述用自然形式(如"全文约1.4万字, 插图14幅、表格3张")。
-2. JSON新增顶层字段 "评审报告"(字符串): 一篇完整评语, 严格按三部分组织, 每部分以标记行开头:
+2. JSON新增顶层字段 "评审报告"(字符串): 一篇完整评语, 严格按【总体评价】→【具体评价】→【修改意见】三段固定顺序组织,
+   三段先后顺序不得颠倒, 且【总体评价】【具体评价】【修改意见】三个标记必须各自另起一行独占段首,
+   段与段之间空一行, 任何标记不得接在上一段末尾同一行。
 【总体评价】2-4句: 论文整体质量与结论。若合格, 写明建议成绩(如"综合评定为合格, 建议成绩82分");
   若不合格, 只作定性结论, 不得出现任何分数、分值、得分。
 3. 【具体评价】(在"评审报告"内): 按题目、结构、内容与论证、语言与规范等维度逐段展开,
    所有具体问题在此详细指出(引到章节、数值、图表编号等原文位置), 用连贯段落, 不用表格罗列。
 4. 【修改意见】(在"评审报告"内): 逐条列出, 具体可执行; 不合格论文的修改意见要覆盖全部主要缺陷。
-5. 其余分项字段照常输出(供内部判定), 但"评审报告"是最终呈现文本, 必须自足完整。
+5. 封面页不属于论文内容审核范围: 封面信息、指导教师姓名、封面填写是否完整等封面事项一律不审核、不评价,
+   评语任何部分(总体评价/具体评价/修改意见)均不得提及封面问题。
+6. 其余分项字段照常输出(供内部判定), 但"评审报告"是最终呈现文本, 必须自足完整。
 
 请按以下JSON格式输出评审结果：
 
@@ -393,15 +440,36 @@ class ThesisDesignReviewer:
             {"role": "user", "content": prompt}
         ]
         
-        response = self.call_deepseek_api(messages, max_tokens=5000)
-        
-        if response and 'choices' in response:
+        # 多轮完整调用: 每次解析失败都重新调用API(LLM偶发输出非法JSON, 重调通常成功),
+        # 而非对同一份content空转重试; 清理markdown围栏后 json.loads, 失败再整段提取
+        last_err, content = None, ""
+        for attempt in range(3):
+            if attempt == 0:
+                resp = self.call_deepseek_api(messages, max_tokens=5000)
+            else:
+                self.logger.warning(f"JSON解析失败, 重新调用API(第{attempt+1}/3): {last_err}")
+                resp = self.call_deepseek_api(messages, max_tokens=8000)
+            if not (resp and "choices" in resp):
+                last_err = "API调用无返回"
+                time.sleep(2)
+                continue
+            content = resp["choices"][0]["message"].get("content", "") or ""
+            if not content:
+                last_err = "空正文"
+                continue
             try:
-                result = json.loads(response['choices'][0]['message']['content'])
-                return result
+                cleaned = content.strip()
+                if cleaned.startswith("```"):
+                    cleaned = re.sub(r"^```[a-zA-Z]*\s*|\s*```$", "", cleaned, flags=re.S)
+                i, j = cleaned.find("{"), cleaned.rfind("}")
+                if i >= 0 and j > i:
+                    cleaned = cleaned[i:j + 1]
+                return json.loads(cleaned)
             except Exception as e:
-                self.logger.error(f"解析API返回结果失败：{str(e)}")
-        
+                last_err = e
+                self.logger.error(f"JSON解析失败(第{attempt+1}/3): {e}")
+            time.sleep(1)
+        self.logger.warning("LLM输出无法解析为JSON, 改用规则兜底")
         return self._rule_based_review(thesis_text, thesis_info, title)
     
     def _rule_based_review(self, thesis_text: str, thesis_info: Dict, title: str) -> Dict:

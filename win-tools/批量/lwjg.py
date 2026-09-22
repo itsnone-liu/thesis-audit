@@ -203,8 +203,16 @@ class ThesisDeepSeekReviewer:
             
             # 统计图片
             for para in doc.paragraphs:
-                if 'graphicData' in para._element.xml:
-                    stats["image_count"] += 1
+                # 2026-09-22修: VML老格式(<w:pict>/<v:imagedata>)也认, 不再只认graphicData
+                _px = para._element.xml
+                stats["image_count"] += _px.count('<a:blip') + _px.count('<v:imagedata')
+            # 2026-09-22修: 扫描表格单元格中的图片(与lwsj.py同构修复)——经管论文也常把图
+            # 放进表格单元格, 只遍历doc.paragraphs会漏数, 导致"数据支撑不足"误判
+            for tb in doc.tables:
+                for row in tb.rows:
+                    for cell in row.cells:
+                        _cx = cell._tc.xml
+                        stats["image_count"] += _cx.count('<a:blip') + _cx.count('<v:imagedata')
             
             return full_text_str, {
                 "sections": sections,
@@ -325,13 +333,17 @@ class ThesisDeepSeekReviewer:
 ## 评审报告撰写规范(最高优先级, 适用于所有评语与"评审报告"字段)
 1. 评语以自然语言撰写, 像一位毕业论文指导教师在评阅: 禁止"实测""检测到""程序判定""证据""预检""指标显示"等程序化词汇;
    数据表述用自然形式(如"全文约1.4万字, 插图14幅、表格3张")。
-2. JSON新增顶层字段 "评审报告"(字符串): 一篇完整评语, 严格按三部分组织, 每部分以标记行开头:
+2. JSON新增顶层字段 "评审报告"(字符串): 一篇完整评语, 严格按【总体评价】→【具体评价】→【修改意见】三段固定顺序组织,
+   三段先后顺序不得颠倒, 且【总体评价】【具体评价】【修改意见】三个标记必须各自另起一行独占段首,
+   段与段之间空一行, 任何标记不得接在上一段末尾同一行。
 【总体评价】2-4句: 论文整体质量与结论。若合格, 写明建议成绩(如"综合评定为合格, 建议成绩82分");
   若不合格, 只作定性结论, 不得出现任何分数、分值、得分。
 3. 【具体评价】(在"评审报告"内): 按题目、结构、内容与论证、语言与规范等维度逐段展开,
    所有具体问题在此详细指出(引到章节、数值、图表编号等原文位置), 用连贯段落, 不用表格罗列。
 4. 【修改意见】(在"评审报告"内): 逐条列出, 具体可执行; 不合格论文的修改意见要覆盖全部主要缺陷。
-5. 其余分项字段照常输出(供内部判定), 但"评审报告"是最终呈现文本, 必须自足完整。
+5. 封面页不属于论文内容审核范围: 封面信息、指导教师姓名、封面填写是否完整等封面事项一律不审核、不评价,
+   评语任何部分(总体评价/具体评价/修改意见)均不得提及封面问题。
+6. 其余分项字段照常输出(供内部判定), 但"评审报告"是最终呈现文本, 必须自足完整。
 
 请严格按以下JSON格式输出详细的评审结果。每个评语都要详细具体，指出问题所在。
 
@@ -402,15 +414,36 @@ class ThesisDeepSeekReviewer:
             {"role": "user", "content": prompt}
         ]
         
-        response = self.call_deepseek_api(messages, max_tokens=4000)
-        
-        if response and 'choices' in response:
+        # 多轮完整调用: 每次解析失败都重新调用API(LLM偶发输出非法JSON, 重调通常成功),
+        # 而非对同一份content空转重试; 清理markdown围栏后 json.loads, 失败再整段提取
+        last_err, content = None, ""
+        for attempt in range(3):
+            if attempt == 0:
+                resp = self.call_deepseek_api(messages, max_tokens=4000)
+            else:
+                self.logger.warning(f"JSON解析失败, 重新调用API(第{attempt+1}/3): {last_err}")
+                resp = self.call_deepseek_api(messages, max_tokens=8000)
+            if not (resp and "choices" in resp):
+                last_err = "API调用无返回"
+                time.sleep(2)
+                continue
+            content = resp["choices"][0]["message"].get("content", "") or ""
+            if not content:
+                last_err = "空正文"
+                continue
             try:
-                result = json.loads(response['choices'][0]['message']['content'])
-                return result
+                cleaned = content.strip()
+                if cleaned.startswith("```"):
+                    cleaned = re.sub(r"^```[a-zA-Z]*\s*|\s*```$", "", cleaned, flags=re.S)
+                i, j = cleaned.find("{"), cleaned.rfind("}")
+                if i >= 0 and j > i:
+                    cleaned = cleaned[i:j + 1]
+                return json.loads(cleaned)
             except Exception as e:
-                self.logger.error(f"解析API返回结果失败：{str(e)}")
-        
+                last_err = e
+                self.logger.error(f"JSON解析失败(第{attempt+1}/3): {e}")
+            time.sleep(1)
+        self.logger.warning("LLM输出无法解析为JSON, 改用规则兜底")
         # API调用失败，使用规则审核
         return self._rule_based_review(thesis_text, thesis_info, title)
     

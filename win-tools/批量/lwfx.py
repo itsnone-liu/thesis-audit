@@ -37,6 +37,18 @@ def _pa_block(file_path):
     except Exception:
         return ""
 
+
+def _count_refs(thesis_info):
+    """程序实测参考文献条数: 优先数'参考文献'章节内 [数字] 编号行, fallback全文统计。"""
+    sections = thesis_info.get("sections", {})
+    for k, v in sections.items():
+        if "参考文献" in k:
+            n = sum(1 for ln in v.split("\n") if re.search(r"\[\d+\]", ln))
+            if n:
+                return n
+    return thesis_info.get("stats", {}).get("reference_count", 0)
+
+
 class ThesisLawReviewer:
     """
     使用DeepSeek的法学论文审核程序
@@ -317,6 +329,7 @@ class ThesisLawReviewer:
         
         # 构建Prompt
         _pa = _pa_block(thesis_info.get('_source_path'))
+        _refs_n = _count_refs(thesis_info)
         prompt = f"""
         你是一位严格的本科法学毕业论文评审专家。请按照以下要求对论文进行详细评审。
 
@@ -325,17 +338,26 @@ class ThesisLawReviewer:
         - 论文类型：{thesis_type}
         - 总字数：{word_count}字
         - 章节列表：{section_names}
+        - 参考文献条数（程序实测）：{_refs_n} 条 —— 该数字由程序从文档参考文献区实统计, 是判断"参考文献数量"的唯一依据, 你不得臆断数量不足或数量达标, 只依据此数。
 
         ## 审核要求
+
+        ### 从严原则（最高优先级, 适用于内容与结构判定）
+        0. 内容结构从严、逻辑从严：对论文的内容结构、章节逻辑、论证逻辑问题一律从严判定, 宁错勿放——
+           ① 存在与论文主题无关的实质章节/大段内容（如正当防卫论文中整节论述"算法从属性"等无关内容）属严重错误, 框架必判不合格;
+           ② 核心章节严重缺失/缺失两个及以上核心章节 → 框架不合格;
+           ③ 章节编号重复、标题错位、内容错位（某节内容与标题不符）→ 框架/结构从严, 不得以"小瑕疵"放行;
+           ④ 论证逻辑断裂、问题-建议不对应等逻辑问题 → 论证分析从严扣分, 逻辑严重混乱者语言/框架项不合格;
+           ⑤ 把握不准时从严判定（宁错勿放）：结构或逻辑存在疑似的严重问题时, 判不合格; 分项评分如实反映严重程度。
 
         ### 必达项（必须全部达到，否则不合格）
         1. 题目合格：{type_requirements.get('题目要求', '符合类型要求')}
            案例名称/制度载体的脱敏表述(如"某公司劳动争议案""XX案")同四形态有效, 不得因脱敏扣分
-        2. 字数合格：正文字数不少于8000字
-        3. 框架合格：基本符合所选类型的框架结构，包含核心章节
-        4. 语言合格：语句通顺专业，逻辑合理，观点明确
+        2. 字数合格：正文字数不少于8000字（以程序实测总字数为准, 不必人工重数）
+        3. 框架合格：基本符合所选类型的框架结构，包含核心章节；同时必须无重大结构缺陷（无关章节、重大缺失、章节编号重复、内容错位）, 见从严原则
+        4. 语言合格：语句通顺专业，逻辑合理，观点明确；逻辑问题从严见从严原则
         5. 案例来源合格：案例真实，标注来源（裁判文书网/北大法宝等）
-        6. 参考文献合格：不少于10条，格式规范
+        6. 参考文献合格：程序实测 {_refs_n} 条, 达到10条即数量合格（此条由程序判定, 你只需评质量格式）
 
         ### {thesis_type}核心章节要求
         应包含以下核心章节（标题可以略有不同）：
@@ -673,6 +695,18 @@ class ThesisLawReviewer:
         self.logger.info("正在使用DeepSeek进行审核...")
         thesis_info['_source_path'] = file_path
         review_result = self.review_with_deepseek(thesis_text, thesis_info, title, thesis_type)
+
+        # 4b. 程序侧兜底(2026-09-22从严口径):
+        # ① 参考文献数量合格由程序硬判(实测条数>=10), 覆盖LLM误判;
+        # ② 任一必达项不合格 → 强制 是否合格=false, 防止LLM自相矛盾(如必达项挂但判合格)。
+        if review_result:
+            _refs_n = _count_refs(thesis_info)
+            mp = review_result.get("必达项检查") or {}
+            mp["参考文献合格"] = _refs_n >= 10
+            review_result["必达项检查"] = mp
+            if not all(mp.values()):
+                review_result["是否合格"] = False
+            self.logger.info(f"程序侧兜底: 实测参考文献{_refs_n}条, 必达项全过={all(mp.values())}, 最终是否合格={review_result['是否合格']}")
         
         # 5. 生成报告
         report = self.generate_report(review_result, thesis_info, title, thesis_type)

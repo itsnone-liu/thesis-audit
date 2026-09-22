@@ -8,6 +8,7 @@ import requests
 import json
 import time
 import logging
+import os
 from datetime import datetime
 
 # ==================== 日志配置 ====================
@@ -22,6 +23,16 @@ logging.basicConfig(
 )
 
 # ==================== 配置区域 ====================
+# .env 加载(本地仓库优先, 回退旧服务器路径)
+for _ENVF in ("/root/hworkspace/thesis-audit/.env", "/root/project/workspace/thesis-reviser/.env"):
+    if os.path.exists(_ENVF):
+        for line in open(_ENVF):
+            line = line.strip()
+            if line.startswith("export "):
+                line = line[7:]
+            if "=" in line:
+                k, v = line.split("=", 1)
+                os.environ.setdefault(k.strip(), v.strip().strip('"'))
 LOGIN_URL = "https://zk.wencaischool.net/#/login"
 TARGET_URL = "https://zk.wencaischool.net/#/thesisAssignStu"
 USERNAME = os.environ.get("ST_USER", "")  # 凭据走环境变量, 不入库
@@ -29,7 +40,8 @@ PASSWORD = os.environ.get("ST_PASS", "")
 
 # DeepSeek API配置
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
-DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"
+DEEPSEEK_API_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1") + "/chat/completions"
+DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash-0731")
 
 # 不通过理由
 REJECT_REASON = "太宽泛无具体研究对象"
@@ -145,7 +157,7 @@ def check_thesis_with_deepseek(title: str, major: str):
 学生专业：{major}"""
 
     data = {
-        "model": "deepseek-chat",
+        "model": DEEPSEEK_MODEL,
         "messages": [
             {"role": "system", "content": "你是一个严谨的论文审核专家，必须严格基于用户提供的论文题目进行判断，不得编造或添加题目中不存在的信息。"},
             {"role": "user", "content": prompt}

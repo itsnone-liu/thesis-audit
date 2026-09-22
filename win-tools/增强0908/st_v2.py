@@ -18,22 +18,24 @@ from datetime import datetime
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 log = logging.getLogger("st_v2")
 
-# LLM端点: 百炼(服务器.env)优先, 回退DeepSeek官方
-_ENVF = "/root/project/workspace/thesis-reviser/.env"
-if os.path.exists(_ENVF):
-    for line in open(_ENVF):
-        line = line.strip()
-        if line.startswith("export "):
-            line = line[7:]
-        if "=" in line:
-            k, v = line.split("=", 1)
-            os.environ.setdefault(k.strip(), v.strip().strip('"'))
-DEEPSEEK_API_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1") + "/chat/completions"
-DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
+# LLM端点: 本地仓库.env优先(百炼Token套餐), 回退旧服务器路径
+_ENVFS = ["/root/hworkspace/thesis-audit/.env",
+          "/root/project/workspace/thesis-reviser/.env"]
+for _ENVF in _ENVFS:
+    if os.path.exists(_ENVF):
+        for line in open(_ENVF):
+            line = line.strip()
+            if line.startswith("export "):
+                line = line[7:]
+            if "=" in line:
+                k, v = line.split("=", 1)
+                os.environ.setdefault(k.strip(), v.strip().strip('"'))
+DEEPSEEK_API_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1") + "/chat/completions"
+DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash-0731")
 _SRC = ""  # 服务器部署: 凭据走环境变量, 不读 st.py(不入库)
 API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 LOGIN_URL = os.environ.get("ST_LOGIN_URL", "https://zk.wencaischool.net/#/login")
-TARGET_URL = os.environ.get("ST_TARGET_URL", "https://zk.wencaischool.net/#/login")
+TARGET_URL = os.environ.get("ST_TARGET_URL", "https://zk.wencaischool.net/#/thesisAssignStu")
 USERNAME = os.environ.get("ST_USER", "")
 PASSWORD = os.environ.get("ST_PASS", "")
 
@@ -173,7 +175,56 @@ def offline_run(titles_file):
     print(f"\n离线判定: {ok}/{len(out)} 通过 → {outf}")
 
 
-def site_run(commit=False, defense="书面答辩"):
+def submit_review(d, passed):
+    """在详情弹窗打开状态下, 点'审核选题'→审核弹窗选结果→保存。返回状态字符串。"""
+    import time
+    from selenium.webdriver.common.by import By
+    try:
+        # 可见弹窗body(详情弹窗)——过滤历史残留的隐藏弹窗
+        bodies = [b for b in d.find_elements(By.XPATH, '//div[@class="ant-modal-body"]')
+                  if b.is_displayed()]
+        modal = bodies[-1]
+        target = None
+        for tag in ("a", "button", "span"):
+            els = modal.find_elements(By.XPATH, f'.//{tag}[contains(text(),"审核选题")]')
+            if els:
+                target = els[0]
+                break
+        if not target:
+            return "未找到审核选题入口"
+        d.execute_script("arguments[0].click();", target)
+        time.sleep(2)
+        # 审核弹窗=含"审核结果"label的完整content层(z-index最高,取最后)
+        ms = [m for m in d.find_elements(By.XPATH,
+              '//div[contains(@class,"ant-modal-content")][.//*[contains(text(),"审核结果")]]')
+              if m.is_displayed()]
+        if not ms:
+            return "审核弹窗未出现"
+        m2 = ms[-1]
+        sel = m2.find_element(By.CSS_SELECTOR, "div.ant-select-selection")
+        d.execute_script("arguments[0].click();", sel)
+        time.sleep(1.5)
+        opt = "通过" if passed else "不通过"
+        items = [it for it in d.find_elements(By.XPATH, '//li[contains(@class,"ant-select-dropdown-menu-item")]')
+                 if it.is_displayed() and it.text.strip() == opt]
+        if not items:
+            return "审核结果下拉无选项"
+        d.execute_script("arguments[0].click();", items[0])
+        time.sleep(1)
+        save = None
+        for b in m2.find_elements(By.XPATH, './/button[.//span[text()="保 存"]]'):
+            save = b
+            break
+        if not save:
+            return "找不到保存按钮"
+        d.execute_script("arguments[0].click();", save)
+        time.sleep(2.5)
+        return f"已提交:{opt}"
+    except Exception as e:
+        return f"提交异常:{type(e).__name__}"
+
+
+def site_run(commit=False, defense="现场答辩"):
     """网站模式: 登录→筛选→逐条判定→(仅--commit时提交)。默认只读+输出判定。"""
     from selenium import webdriver
     from selenium.webdriver.common.by import By
@@ -200,11 +251,17 @@ def site_run(commit=False, defense="书面答辩"):
         d.get(TARGET_URL)
         time.sleep(4)
         # 筛选: 未审核 + 指定答辩方式
-        d.find_element(By.XPATH, '//label[text()="选题状态"]/following::div[contains(@class,"ant-select-selection")][1]').click()
+        # 定位label所在form-item行的ant-select控件
+        def _form_select(label_text):
+            label = d.find_element(By.XPATH, f'//label[contains(text(),"{label_text}")]')
+            item = label.find_element(By.XPATH, "ancestor::div[contains(@class,'ant-form-item') and not(contains(@class,'ant-form-item-label')) and not(contains(@class,'ant-form-item-control'))][1]")
+            sel = item.find_element(By.XPATH, ".//div[contains(@class,'ant-select-selection')]")
+            return sel
+        _form_select("选题状态").click()
         time.sleep(1)
         d.find_element(By.XPATH, '//li[text()="未审核"]').click()
         time.sleep(1)
-        d.find_element(By.XPATH, '//label[text()="答辩方式"]/following::div[contains(@class,"ant-select-selection")][1]').click()
+        _form_select("答辩方式").click()
         time.sleep(1)
         li = d.find_elements(By.XPATH, f'//li[text()="{defense}"]')
         if li:
@@ -214,36 +271,59 @@ def site_run(commit=False, defense="书面答辩"):
         time.sleep(3)
         rows = d.find_elements(By.CSS_SELECTOR, "tr.ant-table-row")
         print(f"筛选[{defense}/未审核]: {len(rows)} 条")
-        for i in range(min(len(rows), 50)):
+        done_titles = set()  # 已成功提交的题目,防止列表未刷新时死循环
+        max_iter = len(rows) + 3
+        for _ in range(max_iter):
             try:
                 rows = d.find_elements(By.CSS_SELECTOR, "tr.ant-table-row")
-                rows[i].find_elements(By.XPATH, './/a[text()="查看"]')[0].click()
+                if not rows:
+                    break  # 全部处理完
+                # 每次处理列表第一行;提交成功后该行会从"未审核"名单消失
+                row = rows[0]
+                if row.text.strip() in done_titles:
+                    break  # 列表没刷新(提交失败卡住),退出防死循环
+                row.find_elements(By.XPATH, './/a[text()="查看"]')[0].click()
                 time.sleep(1.5)
-                tcell = d.find_element(By.XPATH, '//div[@class="ant-modal-body"]//td[@class="ant-table-row-cell-break-word"][1]')
-                title = tcell.text.strip()
+                tcell = None
+                for bd in d.find_elements(By.XPATH, '//div[@class="ant-modal-body"]'):
+                    if bd.is_displayed():
+                        tds = bd.find_elements(By.XPATH, './/td[@class="ant-table-row-cell-break-word"]')
+                        if tds:
+                            tcell = tds[0]
+                            break
+                title = tcell.text.strip() if tcell else ""
                 # 行内专业(第3-4列尝试)
                 major = ""
-                for td in rows[i].find_elements(By.TAG_NAME, "td"):
+                for td in row.find_elements(By.TAG_NAME, "td"):
                     txt = td.text.strip()
                     if any(k in txt for k in ("工程", "管理", "设计", "法学", "财务", "金融", "机械")):
                         major = txt
                         break
                 p, r = check_title(title, major or "未知")
-                results.append({"title": title, "major": major, "passed": p, "reason": r})
+                submitted = None
+                if commit and p is not None:
+                    submitted = submit_review(d, bool(p))
+                if submitted:
+                    done_titles.add(row.text.strip())  # 提交成功则标记
+                results.append({"title": title, "major": major, "passed": p, "reason": r, "submitted": submitted})
                 log.info(f"[{'通过' if p else '不通过'}] {major} {title[:32]} | {r[:50]}")
-                # 关闭模态框
-                for btn in d.find_elements(By.XPATH, '//div[@role="dialog"]//button[@aria-label="Close"] | //div[@class="ant-modal-close"]'):
-                    try:
-                        btn.click()
+                if submitted:
+                    log.info(f"  → 提交: {submitted}")
+                # 关闭所有残留模态框(连续点Close直到无可见弹窗)
+                for _ in range(6):
+                    btns = [b for b in d.find_elements(By.XPATH,
+                           '//div[@role="dialog"]//button[@aria-label="Close"] | //div[contains(@class,"ant-modal-close")]')
+                           if b.is_displayed()]
+                    if not btns:
                         break
+                    try:
+                        d.execute_script("arguments[0].click();", btns[0])
+                        time.sleep(0.8)
                     except Exception:
-                        continue
+                        break
                 time.sleep(1)
-                if commit:
-                    print("!! commit模式未实现提交(默认dry-run保护)——仅输出判定")
-                    break
             except Exception as e:
-                log.warning(f"第{i}条处理异常: {type(e).__name__}")
+                log.warning(f"处理异常(剩余{len(d.find_elements(By.CSS_SELECTOR, 'tr.ant-table-row'))}行): {type(e).__name__}")
                 continue
     finally:
         d.quit()
@@ -258,7 +338,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--titles", help="离线模式: 题目清单json [{title,major}]")
     ap.add_argument("--commit", action="store_true", help="实际提交到网站(默认dry-run只判定)")
-    ap.add_argument("--defense", default="书面答辩", help="答辩方式筛选(默认书面答辩)")
+    ap.add_argument("--defense", default="现场答辩", help="答辩方式筛选(默认现场答辩)")
     a = ap.parse_args()
     if a.titles:
         offline_run(a.titles)

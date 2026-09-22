@@ -45,9 +45,9 @@ def load_keys():
     return keys
 
 KEYS = load_keys()
-DS_KEY = KEYS.get("DASHSCOPE_API_KEY", os.environ.get("DASHSCOPE_API_KEY", ""))
+DS_KEY = KEYS.get("DASHSCOPE_API_KEY", os.environ.get("DASHSCOPE_API_KEY", "")) or KEYS.get("DEEPSEEK_API_KEY", os.environ.get("DEEPSEEK_API_KEY", ""))
 CP_KEY = KEYS.get("CODEX_PROXY_API_KEY", os.environ.get("CODEX_PROXY_API_KEY", ""))
-DS_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+DS_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1") + "/chat/completions"
 CP_URL = "http://127.0.0.1:8788/v1/chat/completions"
 
 
